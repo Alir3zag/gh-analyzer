@@ -111,20 +111,19 @@ async def fetch_commits(
     commits = []
     page = 1
 
-    while True:
-        for attempt in range(1, MAX_RETRIES + 1):
-            async with sem:
-                try:
-                    async with session.get(url, params={**params, "page": page}) as resp:
-                        rate_limiter.update_from_headers(resp.headers)
+    for attempt in range(1, MAX_RETRIES + 1):   
+        async with sem:
+            try:
+                async with session.get(url, params={**params, "page": page}) as resp:
+                    rate_limiter.update_from_headers(resp.headers)
 
-                        if resp.status == 200:
-                            data = await resp.json()
-                            commits.extend(data)
-                            if len(data) < (params.get("per_page", 30)):
-                                return commits[:limit] if limit else commits
-                            page += 1
-                            break
+                    if resp.status == 200:
+                        data = await resp.json()
+                        commits.extend(data)
+                        if len(data) < (params.get("per_page", 30)):
+                            return commits[:limit] if limit else commits
+                        page += 1
+                        continue
 
                         if resp.status in (403, 429):
                             await rate_limiter.wait_if_needed()
