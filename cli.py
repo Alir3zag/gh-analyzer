@@ -1,7 +1,8 @@
 import sys
 import re
 import argparse
-from models import Repo
+from datetime import datetime, timezone, timedelta
+from models import CLIArgs
 
 def positive_int(value: str) -> int:
     """Custom argparse type: positive integer (> 0)."""
@@ -14,13 +15,11 @@ def positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be positive (> 0)")
     return ivalue
 
-def valid_path(path: str) -> None:
-    """Raise ValueError if path is not in owner/repo format"""
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
-        raise ValueError("Wrong Path Format")
-
-def extract_repo(path: str) -> tuple[str, str]:
-    return path.split("/", 1)
+def valid_repo_path(value: str) -> str:
+    """Custom argparse type: validates owner/repo format."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
+        raise argparse.ArgumentTypeError("must be in owner/repo format (e.g. 'owner/repo')")
+    return value
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -29,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "repo",
+        type=valid_repo_path,
         help="Repository in owner/name format (e.g. 'owner/repo')."
     )
     parser.add_argument(
@@ -62,23 +62,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-def parse_and_validate_args(argv: list[str] | None = None) -> Repo:
-    """Parse CLI args, validate repo format, and return Repo object."""
+def from_args(argv: list[str] | None = None) -> CLIArgs:
+    """Parse CLI args, validate repo format, and return CLIArgs object."""
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    try:
-        valid_path(args.repo)
-        username, repo_name = extract_repo(args.repo)
-    except ValueError:
-        print("Wrong Path Format! Must be owner/repo", file=sys.stderr)
-        sys.exit(2)
+    username, repo_name = args.repo.split("/", 1)
+    since_dt = datetime.now(timezone.utc) - timedelta(days=args.since)
 
-    # Build Repo object directly
-    return Repo(
+    return CLIArgs(
         username=username,
         repo_name=repo_name,
-        since=args.since,
+        since=since_dt,
         limit=args.limit,
         format=args.format,
         top=args.top,
