@@ -35,3 +35,11 @@ async def run(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(run()))
+
+
+# repo, commits, issues, prs = await asyncio.gather(
+#     fetch_repo(...),
+#     fetch_recent_commits(...),
+#     fetch_issues(...),
+#     fetch_pull_requests(...),
+# )

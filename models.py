@@ -12,6 +12,9 @@ class CLIArgs:
     format: str = "text"
     top: Optional[int] = None
     verbose: bool = False
+    def __post_init__(self):
+        if self.format not in {"text", "json"}:
+            raise ValueError("Format must be 'text' or 'json'")
 
 
 @dataclass
@@ -38,12 +41,12 @@ class Repo:
             forks=data["forks_count"],
             open_issues=data["open_issues_count"],
             default_branch=data["default_branch"],
-            created_at=datetime.fromisoformat(data["created_at"].rstrip("Z")),
-            updated_at=datetime.fromisoformat(data["updated_at"].rstrip("Z")),
+            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
+            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00")),
             language=data.get("language"),
             url=data["html_url"],
         )
-
+        
 
 @dataclass
 class Commit:
@@ -70,3 +73,6 @@ class Commit:
             date=datetime.fromisoformat(this_commit["author"]["date"].rstrip("Z")),
             url=data["html_url"],
         )
+    
+    def __str__(self) -> str:
+        return f"{self.short_sha} - {self.message} (by {self.author_name} on {self.date.strftime('%Y-%m-%d')})"
