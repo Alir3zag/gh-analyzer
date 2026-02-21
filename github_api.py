@@ -2,10 +2,10 @@ import asyncio
 import os
 import time
 import aiohttp
+import logging
 from datetime import datetime, timezone
 from models import CLIArgs, Repo
 import random
-from cli import from_args
 from exceptions import (
     GitHubAPIError,
     RepoNotFoundError,
@@ -13,6 +13,8 @@ from exceptions import (
     RateLimitError,
     NetworkError,
 )
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.github.com/repos"
 
@@ -35,8 +37,9 @@ def build_headers() -> dict:
         headers["Authorization"] = f"Bearer {token.strip()}"
     else:
         if not _warned_no_token:
-            print("⚠️  GITHUB_TOKEN not set. Running unauthenticated (60 requests/hour).")
+            logger.warning("GITHUB_TOKEN not set. Running unauthenticated (60 requests/hour).")
             _warned_no_token = True
+
     return headers
 
 
@@ -60,95 +63,59 @@ class RateLimitTracker:
         self.remaining = _parse_int_header("X-RateLimit-Remaining", self.remaining)
         self.reset_time = _parse_int_header("X-RateLimit-Reset", self.reset_time)
         self.limit = _parse_int_header("X-RateLimit-Limit", self.limit)
-        # Handle both seconds and HTTP-date formats for Retry-After
         retry_after = headers.get("Retry-After")
         if retry_after:
             try:
                 self.retry_after = int(retry_after)
             except ValueError:
-                # Try parsing as HTTP-date
                 from email.utils import parsedate_to_datetime
                 dt = parsedate_to_datetime(retry_after)
-                # Calculate seconds until retry
-                self.retry_after = max(0, int((dt - datetime.now(timezone.utc)).total_seconds()))
-
-
-
-    def report(self) -> None:
-        """Print a concise, human-friendly summary of remaining requests and reset."""
-        if self.remaining is None:
-            print("\n📊 Rate Limit Remaining: unknown")
-            return
-
-        reset_info = ""
-        reset_dt = None
-        seconds_left = None
-
-        if self.reset_time is not None:
-            try:
-                reset_dt = datetime.fromtimestamp(self.reset_time, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-                seconds_left = int(self.reset_time - time.time())
-                reset_info = (
-                    f", resets in ~{seconds_left}s at {reset_dt}"
-                    if seconds_left > 0
-                    else f", reset at {reset_dt}"
+                self.retry_after = max(
+                    0,
+                    int((dt - datetime.now(timezone.utc)).total_seconds())
                 )
-            except Exception:
-                reset_info = ""
+        else:
+            self.retry_after = None
 
-        if self.remaining == 0:
-            limit_info = f" Expected quota after reset: {self.limit}" if self.limit is not None else ""
-            if seconds_left is not None and seconds_left > 0:
-                print(f"\n⚠️ Rate limit exhausted. Waiting ~{seconds_left}s until reset at {reset_dt}.{limit_info}")
-            else:
-                print("\n⚠️ Rate limit exhausted. Reset time unknown.")
-            return
-
-        if self.remaining < RATE_LIMIT_THRESHOLD:
-            if seconds_left is not None and seconds_left > 0:
-                print(f"\n⚠️ Rate limit low: {self.remaining} remaining; resets in ~{seconds_left}s at {reset_dt}")
-            else:
-                print(f"\n⚠️ Rate limit low: {self.remaining} remaining")
-            return
-
-        print(f"\n📊 Rate Limit Remaining: {self.remaining}{reset_info}")
+    def report(self) -> dict:
+        """Return structured rate-limit info for the caller (CLI) to display."""
+        return {
+            "remaining": self.remaining,
+            "reset_time": self.reset_time,
+            "limit": self.limit,
+        }
 
     async def wait_if_needed(self) -> None:
+        # Secondary rate limit
         if self.retry_after is not None and self.retry_after > 0:
             wait = max(self.retry_after, 0)
-            print(f"⚠️ Received Retry-After: sleeping for {self.retry_after}s...")
-            await asyncio.sleep(wait + random.uniform(0.1, 0.5))  # Add jitter to avoid thundering herd
+            logger.warning(f"Retry-After received: sleeping {wait}s")
+            await asyncio.sleep(wait + random.uniform(0.1, 0.5))
             return
-        
+
+        # No primary rate-limit info
         if self.remaining is None or self.reset_time is None:
             return
 
         now = time.time()
         seconds_left = self.reset_time - now
 
-        # Hard limit(Exhausted)
+        # Hard limit
         if self.remaining == 0:
             if seconds_left > 0:
-                print(f"⚠️ Rate limit exhausted. Sleeping ~{seconds_left + 1:.0f}s until reset...")
+                logger.warning(f"Rate limit exhausted. Sleeping {seconds_left}s")
                 await asyncio.sleep(seconds_left + 1)
             return
 
-        # Soft throttling when remaining requests are low spread the requests until reset
+        # Soft throttling
         if self.remaining < RATE_LIMIT_THRESHOLD:
-            # clock skew or stale header
             if seconds_left <= 0:
                 return
 
             delay = seconds_left / max(self.remaining, 1)
-
-            # Clamp delay to reasonable range
             delay = min(max(delay, 0.05), 2.0)
 
-            print(
-                f"⚠️ Rate limit low ({self.remaining} left). "
-                f"Soft throttling: sleeping ~{delay:.2f}s"
-            )
-
+            # Soft throttling is internal — no logging
             await asyncio.sleep(delay)
 
 
@@ -158,9 +125,14 @@ async def fetch_repo(
     cli_args: CLIArgs,
     rate_limiter: RateLimitTracker,
 ) -> Repo:
+
     url = f"{BASE_URL}/{cli_args.username}/{cli_args.repo_name}"
 
     for attempt in range(1, MAX_RETRIES + 1):
+
+        # wait BEFORE sending request (soft throttling)
+        await rate_limiter.wait_if_needed()
+
         async with sem:
             try:
                 async with session.get(url) as resp:
@@ -172,19 +144,19 @@ async def fetch_repo(
 
                     if resp.status in (403, 429):
                         text = await resp.text()
-                        # Detect secondary rate limit
+
+                        # Secondary rate limit
                         if "secondary rate limit" in text.lower() or rate_limiter.retry_after:
-                            print("⚠️ Secondary rate limit detected.")
+                            logger.warning("Secondary rate limit detected.")
                             await rate_limiter.wait_if_needed()
-                            rate_limiter.retry_after = None  # reset retry after waiting
+                            rate_limiter.retry_after = None
                             continue
 
-                        # Otherwise handle primary rate limit
+                        # Primary rate limit
                         await rate_limiter.wait_if_needed()
                         if attempt < MAX_RETRIES:
                             continue
                         raise RateLimitError(reset_time=rate_limiter.reset_time)
-
 
                     if resp.status == 404:
                         raise RepoNotFoundError(
@@ -198,8 +170,11 @@ async def fetch_repo(
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < MAX_RETRIES:
-                    await asyncio.sleep(0.5 * attempt)
+                    sleep = (0.5 * (2 ** attempt)) + random.uniform(0, 0.3) # Exponential backoff + jitter
+                    await asyncio.sleep(sleep)
                     continue
-                raise NetworkError(f"Request failed after {MAX_RETRIES} attempts: {type(e).__name__}: {e}") from e
+                raise NetworkError(
+                    f"Request failed after {MAX_RETRIES} attempts: {type(e).__name__}: {e}"
+                ) from e
 
-    raise NetworkError("Retries exhausted.")  # should never hit
+    raise NetworkError("Retries exhausted.")
