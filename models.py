@@ -12,10 +12,12 @@ class CLIArgs:
     output_format: str = "text"
     top: int | None = None
     verbose: bool = False
+    token: str | None = None
+    validate_token: bool = False
 
     def __post_init__(self) -> None:
-        if self.output_format not in {"text", "json"}:
-            raise ValueError("Output format must be 'text' or 'json'")
+        if self.output_format not in {"text", "json", "table"}:
+            raise ValueError("Output format must be 'text', 'json', or 'table'")
 
 
 @dataclass

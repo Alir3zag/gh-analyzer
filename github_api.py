@@ -4,6 +4,7 @@ import random
 import aiohttp
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+
 from models import CLIArgs, Repo
 from exceptions import (
     GitHubAPIError,
@@ -27,8 +28,8 @@ MAX_RETRIES = 3
 def build_headers(token: str | None) -> dict:
     """
     Build GitHub request headers.
-    - Always include Accept and User-Agent
-    - Conditionally include Authorization if token is provided
+    - Always include Accept + User-Agent
+    - Include Authorization only if token is provided
     """
     headers = {
         "Accept": "application/vnd.github+json",
@@ -110,7 +111,7 @@ class RateLimitTracker:
 
         # Explicit backoff requested by GitHub
         if self.retry_after is not None and self.retry_after > 0:
-            return float(self.retry_after) + random.uniform(0.1, 0.5)
+            return float(self.retry_after) + random.uniform(0.1, 0.5) # A random jitter to avoid request bursts 
 
         if self.remaining is None or self.reset_time is None:
             return 0.0
