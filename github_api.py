@@ -6,13 +6,8 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from models import CLIArgs, Repo
-from exceptions import (
-    GitHubAPIError,
-    RepoNotFoundError,
-    UnauthorizedError,
-    RateLimitError,
-    NetworkError,
-)
+from exceptions import (GitHubAPIError, RateLimitError, InvalidRepoPathError, 
+    SecondaryRateLimitError, RepoNotFoundError, UnauthorizedError, ForbiddenError, NetworkError)
 
 # Base GitHub REST endpoint for repository resources
 BASE_URL = "https://api.github.com/repos"
@@ -48,16 +43,15 @@ class RateLimitTracker:
 
     IMPORTANT:
     This class is observational only.
-    It does NOT log, print, or enforce policy.
     It simply exposes state so orchestration can decide how to react.
     """
 
     def __init__(self):
-        self.remaining: int | None = None
-        self.reset_time: int | None = None
-        self.limit: int | None = None
-        self.retry_after: int | None = None
-        self.secondary_limited: bool = False
+        self.remaining: int | None = None # requests left
+        self.reset_time: int | None = None # when the window resets (epoch seconds)
+        self.limit: int | None = None # maximum requests allowed in the window
+        self.retry_after: int | None = None # Seconds to wait before retrying, if GitHub explicitly requests backoff
+        self.secondary_limited: bool = False  # Flag to indicate if we've hit secondary ra1te limits (abuse detection)
 
     def update_from_headers(self, headers) -> None:
         """Extract rate-limit metadata from GitHub response headers."""
