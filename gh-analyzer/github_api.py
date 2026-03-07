@@ -5,7 +5,7 @@ import aiohttp
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from models import CLIArgs, Repo
+from models import Repo
 from exceptions import (GitHubAPIError, RateLimitError, InvalidRepoPathError, 
     SecondaryRateLimitError, RepoNotFoundError, UnauthorizedError, ForbiddenError, NetworkError)
 
@@ -18,6 +18,10 @@ MAX_CONCURRENT_REQUESTS = 5
 RATE_LIMIT_THRESHOLD = 10
 
 MAX_RETRIES = 3
+
+# Secondary fallback delay when GitHub signals abuse detection but primary quota looks healthy.
+# This is intentionally conservative — secondary limits are opaque and retrying too fast re-triggers them.
+SECONDARY_RATE_LIMIT_FALLBACK_DELAY = 60.0
 
 
 def build_headers(token: str | None) -> dict:
@@ -32,7 +36,7 @@ def build_headers(token: str | None) -> dict:
     }
 
     if token and token.strip():
-        headers["Authorization"] = f"Bearer {token.strip()}"
+        headers["Authorization"] = f"Bearer {token.strip()}"  # OAuth 2.0 standard; preferred over legacy 'token' scheme
 
     return headers
 
@@ -51,7 +55,7 @@ class RateLimitTracker:
         self.reset_time: int | None = None # when the window resets (epoch seconds)
         self.limit: int | None = None # maximum requests allowed in the window
         self.retry_after: int | None = None # Seconds to wait before retrying, if GitHub explicitly requests backoff
-        self.secondary_limited: bool = False  # Flag to indicate if we've hit secondary ra1te limits (abuse detection)
+        self.secondary_limited: bool = False  # Flag to indicate if we've hit secondary rate limits (abuse detection)
 
     def update_from_headers(self, headers) -> None:
         """Extract rate-limit metadata from GitHub response headers."""
@@ -127,7 +131,8 @@ class RateLimitTracker:
 async def fetch_repo(
     session: aiohttp.ClientSession,
     sem: asyncio.Semaphore,
-    cli_args: CLIArgs,
+    username: str,
+    repo_name: str,
     rate_limiter: RateLimitTracker,
 ) -> Repo:
     """
@@ -136,7 +141,7 @@ async def fetch_repo(
     - retries handle both transient network errors and rate limiting responses
     - rate-limiter is updated on every response to compute backoff
     """
-    url = f"{BASE_URL}/{cli_args.username}/{cli_args.repo_name}"
+    url = f"{BASE_URL}/{username}/{repo_name}"
 
     for attempt in range(1, MAX_RETRIES + 1):
         # Throttle BEFORE acquiring semaphore to avoid occupying concurrency slots while idle
@@ -156,17 +161,38 @@ async def fetch_repo(
                     # Rate limiting / abuse detection
                     if resp.status in (403, 429):
                         text = await resp.text()
-                        # Secondary limits are not always reflected in headers
-                        if "secondary rate limit" in text.lower() or rate_limiter.retry_after:
-                            rate_limiter.secondary_limited = True
 
+                        # Detect secondary rate limit: GitHub returns 403/429 with a body
+                        # mentioning "secondary rate limit" even when X-RateLimit-Remaining > 0.
+                        # This is an independent abuse-detection system — primary quota headers
+                        # cannot be trusted to reflect it.
+                        is_secondary = (
+                            "secondary rate limit" in text.lower()
+                            or rate_limiter.retry_after is not None
+                        )
+
+                        if is_secondary:
+                            rate_limiter.secondary_limited = True
+                            if attempt < MAX_RETRIES:
+                                # Respect Retry-After if provided, otherwise use a conservative
+                                # fixed fallback — retrying immediately re-triggers abuse detection.
+                                backoff = (
+                                    float(rate_limiter.retry_after)
+                                    if rate_limiter.retry_after
+                                    else SECONDARY_RATE_LIMIT_FALLBACK_DELAY
+                                ) + random.uniform(0.1, 0.5)
+                                await asyncio.sleep(backoff)
+                                continue
+                            raise SecondaryRateLimitError(retry_after=rate_limiter.retry_after)
+
+                        # Primary rate limit exhausted
                         if attempt < MAX_RETRIES:
                             continue
                         raise RateLimitError(reset_time=rate_limiter.reset_time)
 
                     if resp.status == 404:
                         raise RepoNotFoundError(
-                            f"Repo {cli_args.username}/{cli_args.repo_name} does not exist or is private."
+                            f"Repo {username}/{repo_name} does not exist or is private."
                         )
 
                     if resp.status == 401:

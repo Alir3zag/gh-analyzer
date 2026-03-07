@@ -6,8 +6,6 @@ import aiohttp
 from cli import from_args
 from github_api import fetch_repo, build_headers, RateLimitTracker, MAX_CONCURRENT_REQUESTS
 
-warned_no_token = False
-
 
 def configure_logging(verbose: bool) -> logging.Logger:
     level = logging.DEBUG if verbose else logging.INFO
@@ -35,20 +33,18 @@ def log_rate_limit(logger: logging.Logger, rate: RateLimitTracker) -> None:
 
 
 async def run(argv=None) -> int:
-    global warned_no_token
     cli_args = from_args(argv)
     logger = configure_logging(cli_args.verbose)
     token = os.getenv("GITHUB_TOKEN")
-    if not token and not warned_no_token:
+    if not token:
         logger.warning("GITHUB_TOKEN not set — running unauthenticated (60 requests/hour).")
-        warned_no_token = True
 
     sem = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     rate = RateLimitTracker()
     timeout = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
 
     async with aiohttp.ClientSession(timeout=timeout, headers=build_headers(token)) as session:
-        repo = await fetch_repo(session, sem, cli_args, rate)
+        repo = await fetch_repo(session, sem, cli_args.username, cli_args.repo_name, rate)
 
     log_rate_limit(logger, rate)
     print(repo)
