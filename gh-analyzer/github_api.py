@@ -5,8 +5,8 @@ import aiohttp
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from models import Repo
-from exceptions import (GitHubAPIError, RateLimitError, InvalidRepoPathError, 
+from models import Repo, Commit, Issue, PullRequest, Release, PRReview
+from exceptions import (GitHubAPIError, RateLimitError, InvalidRepoPathError,
     SecondaryRateLimitError, RepoNotFoundError, UnauthorizedError, ForbiddenError, NetworkError)
 
 # Base GitHub REST endpoint for repository resources
@@ -18,6 +18,9 @@ MAX_CONCURRENT_REQUESTS = 5
 RATE_LIMIT_THRESHOLD = 10
 
 MAX_RETRIES = 3
+
+# GitHub's maximum allowed page size for list endpoints
+PAGE_SIZE = 100
 
 # Secondary fallback delay when GitHub signals abuse detection but primary quota looks healthy.
 # This is intentionally conservative — secondary limits are opaque and retrying too fast re-triggers them.
@@ -109,7 +112,7 @@ class RateLimitTracker:
 
         # Explicit backoff requested by GitHub
         if self.retry_after is not None and self.retry_after > 0:
-            return float(self.retry_after) + random.uniform(0.1, 0.5) # A random jitter to avoid request bursts 
+            return float(self.retry_after) + random.uniform(0.1, 0.5) # A random jitter to avoid request bursts
 
         if self.remaining is None or self.reset_time is None:
             return 0.0
@@ -128,37 +131,31 @@ class RateLimitTracker:
         return 0.0
 
 
-async def fetch_repo(
+async def _request(
     session: aiohttp.ClientSession,
     sem: asyncio.Semaphore,
-    username: str,
-    repo_name: str,
     rate_limiter: RateLimitTracker,
-) -> Repo:
+    url: str,
+    params: dict | None = None,
+) -> dict | list:
     """
-    Fetch repository metadata with retry, backoffs, rate-limit awareness, and concurrency control.
-    - semaphore protects only active HTTP requests, not idle backoff time
-    - retries handle both transient network errors and rate limiting responses
-    - rate-limiter is updated on every response to compute backoff
+    Single HTTP GET with retry, rate-limit awareness, and concurrency control.
+    Shared by all fetch functions to avoid duplicating error handling logic.
     """
-    url = f"{BASE_URL}/{username}/{repo_name}"
-
     for attempt in range(1, MAX_RETRIES + 1):
         # Throttle BEFORE acquiring semaphore to avoid occupying concurrency slots while idle
         delay = rate_limiter.compute_delay_seconds()
         if delay > 0:
             await asyncio.sleep(delay)
-            
+
         try:
-            # Semaphore guards only in-flight request
             async with sem:
-                async with session.get(url) as resp:
+                async with session.get(url, params=params) as resp:
                     rate_limiter.update_from_headers(resp.headers)
 
                     if resp.status == 200:
-                        data = await resp.json()
-                        return Repo.from_api(data)
-                    # Rate limiting / abuse detection
+                        return await resp.json()
+
                     if resp.status in (403, 429):
                         text = await resp.text()
 
@@ -191,9 +188,7 @@ async def fetch_repo(
                         raise RateLimitError(reset_time=rate_limiter.reset_time)
 
                     if resp.status == 404:
-                        raise RepoNotFoundError(
-                            f"Repo {username}/{repo_name} does not exist or is private."
-                        )
+                        raise RepoNotFoundError(f"Resource not found: {url}")
 
                     if resp.status == 401:
                         raise UnauthorizedError("Bad token or missing scopes.")
@@ -210,3 +205,234 @@ async def fetch_repo(
             ) from e
 
     raise NetworkError("Retries exhausted.")
+
+
+async def fetch_repo(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    username: str,
+    repo_name: str,
+    rate_limiter: RateLimitTracker,
+) -> Repo:
+    """Fetch repository metadata."""
+    url = f"{BASE_URL}/{username}/{repo_name}"
+    data = await _request(session, sem, rate_limiter, url)
+    return Repo.from_api(data)
+
+
+async def _paginate(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    rate_limiter: RateLimitTracker,
+    url: str,
+    params: dict | None = None,
+):
+    """
+    Async generator that yields individual items across all pages of a GitHub list endpoint.
+
+    Handles all pagination mechanics — page incrementing, empty page detection, and
+    short-page termination. Callers apply their own stop conditions (since, limit)
+    by simply breaking out of the async for loop.
+
+    Used by: fetch_commits, fetch_issues, fetch_prs, fetch_releases, fetch_pr_reviews
+    """
+    params = dict(params or {})
+    params["per_page"] = PAGE_SIZE
+    page = 1
+
+    while True:
+        params["page"] = page
+        page_data = await _request(session, sem, rate_limiter, url, params=params)
+
+        if not page_data:
+            # Empty page — no more items
+            return
+
+        for item in page_data:
+            yield item
+
+        # Short page means we've reached the last page
+        if len(page_data) < PAGE_SIZE:
+            return
+
+        page += 1
+
+
+async def fetch_commits(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    username: str,
+    repo_name: str,
+    rate_limiter: RateLimitTracker,
+    since: datetime | None = None,
+    limit: int | None = None,
+) -> list[Commit]:
+    """
+    Fetch commits with pagination, stopping at --since boundary or --limit cap.
+    Commits are returned newest-first, as GitHub provides them.
+    """
+    url = f"{BASE_URL}/{username}/{repo_name}/commits"
+
+    # Pass `since` to GitHub to reduce pages fetched for narrow time windows.
+    # We also check locally per-commit as a safeguard against clock skew.
+    params: dict = {}
+    if since:
+        params["since"] = since.isoformat()
+
+    commits: list[Commit] = []
+
+    async for item in _paginate(session, sem, rate_limiter, url, params):
+        commit = Commit.from_api(item)
+
+        if since and commit.date < since:
+            # First commit older than the window — stop immediately
+            break
+
+        commits.append(commit)
+
+        if limit and len(commits) >= limit:
+            # Hard cap reached — stop immediately
+            break
+
+    return commits
+
+
+async def fetch_issues(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    username: str,
+    repo_name: str,
+    rate_limiter: RateLimitTracker,
+    since: datetime | None = None,
+    limit: int | None = None,
+    state: str = "all",           # "open" | "closed" | "all"
+) -> list[Issue]:
+    """
+    Fetch issues with pagination, stopping at --since boundary or --limit cap.
+
+    Note: GitHub's issues endpoint returns both issues and PRs. Items with a
+    `pull_request` key are PRs and are skipped here — use fetch_prs for those.
+    """
+    url = f"{BASE_URL}/{username}/{repo_name}/issues"
+    params: dict = {"state": state, "sort": "created", "direction": "desc"}
+    if since:
+        params["since"] = since.isoformat()
+
+    issues: list[Issue] = []
+
+    async for item in _paginate(session, sem, rate_limiter, url, params):
+        # Skip PRs that appear in the issues endpoint
+        if item.get("pull_request") is not None:
+            continue
+
+        issue = Issue.from_api(item)
+
+        if since and issue.created_at < since:
+            break
+
+        issues.append(issue)
+
+        if limit and len(issues) >= limit:
+            break
+
+    return issues
+
+
+async def fetch_prs(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    username: str,
+    repo_name: str,
+    rate_limiter: RateLimitTracker,
+    since: datetime | None = None,
+    limit: int | None = None,
+    state: str = "all",           # "open" | "closed" | "all"
+) -> list[PullRequest]:
+    """
+    Fetch pull requests with pagination, stopping at --since boundary or --limit cap.
+
+    Uses the dedicated /pulls endpoint which returns full PR objects including
+    merged_at, unlike the issues endpoint which omits merge metadata.
+    """
+    url = f"{BASE_URL}/{username}/{repo_name}/pulls"
+    params: dict = {"state": state, "sort": "created", "direction": "desc"}
+
+    prs: list[PullRequest] = []
+
+    async for item in _paginate(session, sem, rate_limiter, url, params):
+        pr = PullRequest.from_api(item)
+
+        if since and pr.created_at < since:
+            break
+
+        prs.append(pr)
+
+        if limit and len(prs) >= limit:
+            break
+
+    return prs
+
+
+async def fetch_releases(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    username: str,
+    repo_name: str,
+    rate_limiter: RateLimitTracker,
+    since: datetime | None = None,
+    limit: int | None = None,
+) -> list[Release]:
+    """
+    Fetch releases with pagination, stopping at --since boundary or --limit cap.
+    Releases are returned newest-first by the API.
+    """
+    url = f"{BASE_URL}/{username}/{repo_name}/releases"
+
+    releases: list[Release] = []
+
+    async for item in _paginate(session, sem, rate_limiter, url, params={}):
+        release = Release.from_api(item)
+
+        if since and release.published_at < since:
+            break
+
+        releases.append(release)
+
+        if limit and len(releases) >= limit:
+            break
+
+    return releases
+
+
+async def fetch_pr_reviews(
+    session: aiohttp.ClientSession,
+    sem: asyncio.Semaphore,
+    username: str,
+    repo_name: str,
+    pr_number: int,
+    rate_limiter: RateLimitTracker,
+    since: datetime | None = None,
+    limit: int | None = None,
+) -> list[PRReview]:
+    """
+    Fetch all reviews for a single PR, stopping at --since boundary or --limit cap.
+
+    Note: This fetches reviews for one PR at a time. To get reviews across all PRs,
+    call this per PR from the results of fetch_prs.
+    """
+    url = f"{BASE_URL}/{username}/{repo_name}/pulls/{pr_number}/reviews"
+
+    reviews: list[PRReview] = []
+
+    async for item in _paginate(session, sem, rate_limiter, url, params={}):
+        review = PRReview.from_api(item, pr_number=pr_number)
+
+        if since and review.submitted_at < since:
+            break
+
+        reviews.append(review)
+
+        if limit and len(reviews) >= limit:
+            break
+
+    return reviews
