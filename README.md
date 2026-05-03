@@ -2,7 +2,7 @@
 
 A command-line tool for analyzing GitHub repositories — collecting activity data and computing metrics across commits, issues, pull requests, and contributors.
 
-> **Status:** In development — API foundation complete, analytics layer in progress.
+> Analyzes GitHub repository health across commits, issues, pull requests, and releases.
 
 ---
 
