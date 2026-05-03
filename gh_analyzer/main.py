@@ -28,11 +28,13 @@ from gh_analyzer import reporter
 # Constants
 # ─────────────────────────────────────────
 
-# Minimum fetch floor regardless of --limit.
-# Analytics computed on tiny samples produce misleading signals.
 ANALYTICS_COMMIT_FLOOR = 500
 ANALYTICS_ISSUE_FLOOR  = 200
 ANALYTICS_PR_FLOOR     = 200
+
+# Warn the user when fewer than this many requests remain.
+# At 60 req/hour unauthenticated, hitting this means results are likely incomplete.
+RATE_LIMIT_WARN_THRESHOLD = 10
 
 console = Console()
 
@@ -58,10 +60,48 @@ def log_rate_limit(logger: logging.Logger, rate: RateLimitTracker) -> None:
         return
     if rem == 0:
         logger.error("Rate limit exhausted. Reset epoch=%s", s["reset_time"])
-    elif rem < 10:
-        logger.warning("Rate limit low: %s remaining. Reset epoch=%s", rem, s["reset_time"])
+    elif rem < RATE_LIMIT_WARN_THRESHOLD:
+        logger.warning(
+            "Rate limit low: %s remaining. Reset epoch=%s", rem, s["reset_time"]
+        )
     else:
         logger.debug("Rate limit: %s remaining. Reset epoch=%s", rem, s["reset_time"])
+
+
+def warn_if_rate_limit_low(rate: RateLimitTracker) -> bool:
+    """
+    Print a visible rich warning when remaining requests are critically low.
+    Returns True if the warning was shown so callers can act on it.
+
+    Separated from log_rate_limit so it can be tested independently
+    and so the rich warning appears in the report flow rather than
+    mixed into logging output.
+    """
+    s = rate.snapshot()
+    remaining = s["remaining"]
+
+    if remaining is None:
+        return False
+
+    if remaining == 0:
+        console.print(
+            "\n[bold red]✗ Rate limit exhausted.[/bold red] "
+            "All requests are blocked until the quota resets. "
+            "Results shown may be incomplete or empty. "
+            "[dim]Set GITHUB_TOKEN for 5,000 requests/hour.[/dim]"
+        )
+        return True
+
+    if remaining < RATE_LIMIT_WARN_THRESHOLD:
+        console.print(
+            f"\n[bold yellow]⚠ Rate limit low:[/bold yellow] "
+            f"{remaining} requests remaining. "
+            "Some data may be missing from this report. "
+            "[dim]Set GITHUB_TOKEN for 5,000 requests/hour.[/dim]"
+        )
+        return True
+
+    return False
 
 
 # ─────────────────────────────────────────
@@ -179,8 +219,6 @@ async def run(argv=None) -> int:
     if not cli_args.token:
         logger.warning("No token — running unauthenticated (60 requests/hour).")
 
-    # Compute analytics window here so it is available to both
-    # the fetch layer and the analytics engine.
     now             = datetime.now(timezone.utc)
     analytics_since = cli_args.since - (now - cli_args.since)
 
@@ -201,6 +239,7 @@ async def run(argv=None) -> int:
             return 1
 
     log_rate_limit(logger, rate)
+    warn_if_rate_limit_low(rate)
 
     # ── Stage 1: raw report ──
     reporter.print_repo_header(repo)
