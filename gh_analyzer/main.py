@@ -21,14 +21,15 @@ from gh_analyzer.github_api import (
 )
 from gh_analyzer.models import Repo, Commit, Issue, PullRequest, Release, CLIArgs
 from gh_analyzer.exceptions import GitHubAPIError
+from gh_analyzer.analytics import MetricsComputer, HealthScorer
 from gh_analyzer import reporter
 
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
 
-# Minimum commit fetch regardless of --limit.
-# Bus factor computed on <200 commits is statistically meaningless.
+# Minimum fetch floor regardless of --limit.
+# Analytics computed on tiny samples produce misleading signals.
 ANALYTICS_COMMIT_FLOOR = 500
 ANALYTICS_ISSUE_FLOOR  = 200
 ANALYTICS_PR_FLOOR     = 200
@@ -72,35 +73,28 @@ async def _fetch_all(
     sem: asyncio.Semaphore,
     rate: RateLimitTracker,
     cli_args: CLIArgs,
+    analytics_since: datetime,
     logger: logging.Logger,
 ) -> tuple[Repo, list[Commit], list[Issue], list[PullRequest], list[Release]]:
     """
     Fetch all repository data concurrently with a live progress spinner.
 
     Failure policy:
-      - repo:    hard failure — raises immediately, nothing else makes sense
-      - others:  soft failure — logs warning, returns empty list, report continues
-    
-    Window policy:
-      We fetch double the user's --since window so Stage 2 trend analysis
-      has both the current and prior periods available without extra API calls.
+      - repo:    hard failure — raises immediately
+      - others:  soft failure — logs warning, returns empty list
+
+    analytics_since is computed in run() and passed in so the same
+    value is available to the analytics engine without recomputing.
     """
-    now = datetime.now(timezone.utc)
-
-    # Double window: if user asked for 30 days, fetch 60 so we have
-    # current (days 0-30) and prior (days 30-60) for trend computation.
-    analytics_since = cli_args.since - (now - cli_args.since)
-
-    # Never fetch fewer than the analytics floors regardless of --limit.
-    commit_limit  = max(cli_args.limit, ANALYTICS_COMMIT_FLOOR)
-    issue_limit   = max(cli_args.limit, ANALYTICS_ISSUE_FLOOR)
-    pr_limit      = max(cli_args.limit, ANALYTICS_PR_FLOOR)
+    commit_limit = max(cli_args.limit, ANALYTICS_COMMIT_FLOOR)
+    issue_limit  = max(cli_args.limit, ANALYTICS_ISSUE_FLOOR)
+    pr_limit     = max(cli_args.limit, ANALYTICS_PR_FLOOR)
 
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
-        transient=True,   # erases spinner lines when done, leaving clean output
+        transient=True,
     )
 
     with progress:
@@ -113,7 +107,6 @@ async def _fetch_all(
         }
 
         async def tracked(coro, key: str):
-            """Run coro, then mark its spinner row as complete."""
             result = await coro
             progress.update(
                 task_ids[key],
@@ -152,11 +145,9 @@ async def _fetch_all(
 
     repo, commits, issues, prs, releases = results
 
-    # Hard fail on repo
     if isinstance(repo, BaseException):
         raise repo
 
-    # Soft fail on everything else
     for name, result in [
         ("commits",  commits),
         ("issues",   issues),
@@ -188,6 +179,11 @@ async def run(argv=None) -> int:
     if not cli_args.token:
         logger.warning("No token — running unauthenticated (60 requests/hour).")
 
+    # Compute analytics window here so it is available to both
+    # the fetch layer and the analytics engine.
+    now             = datetime.now(timezone.utc)
+    analytics_since = cli_args.since - (now - cli_args.since)
+
     sem     = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     rate    = RateLimitTracker()
     timeout = aiohttp.ClientTimeout(total=30, connect=5, sock_read=20)
@@ -198,7 +194,7 @@ async def run(argv=None) -> int:
     ) as session:
         try:
             repo, commits, issues, prs, releases = await _fetch_all(
-                session, sem, rate, cli_args, logger
+                session, sem, rate, cli_args, analytics_since, logger
             )
         except GitHubAPIError as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
@@ -206,12 +202,24 @@ async def run(argv=None) -> int:
 
     log_rate_limit(logger, rate)
 
-    # Render report
+    # ── Stage 1: raw report ──
     reporter.print_repo_header(repo)
     reporter.print_commit_summary(commits, cli_args.since)
     reporter.print_issue_summary(issues)
     reporter.print_pr_summary(prs)
     reporter.print_release_summary(releases)
+
+    # ── Stage 2: analytics and health score ──
+    metrics = MetricsComputer().compute(
+        commits        = commits,
+        issues         = issues,
+        prs            = prs,
+        releases       = releases,
+        display_since  = cli_args.since,
+        analysis_since = analytics_since,
+    )
+    score = HealthScorer().score(metrics)
+    reporter.print_health_score(score)
 
     return 0
 
