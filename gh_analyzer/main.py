@@ -22,18 +22,16 @@ from gh_analyzer.github_api import (
 from gh_analyzer.models import Repo, Commit, Issue, PullRequest, Release, CLIArgs
 from gh_analyzer.exceptions import GitHubAPIError
 from gh_analyzer.analytics import MetricsComputer, HealthScorer
-from gh_analyzer import reporter
+from gh_analyzer.risk import RiskDetector
+from gh_analyzer.reporter import RepoReport, Reporter
 
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
 
-ANALYTICS_COMMIT_FLOOR = 500
-ANALYTICS_ISSUE_FLOOR  = 200
-ANALYTICS_PR_FLOOR     = 200
-
-# Warn the user when fewer than this many requests remain.
-# At 60 req/hour unauthenticated, hitting this means results are likely incomplete.
+ANALYTICS_COMMIT_FLOOR    = 500
+ANALYTICS_ISSUE_FLOOR     = 200
+ANALYTICS_PR_FLOOR        = 200
 RATE_LIMIT_WARN_THRESHOLD = 10
 
 console = Console()
@@ -69,20 +67,10 @@ def log_rate_limit(logger: logging.Logger, rate: RateLimitTracker) -> None:
 
 
 def warn_if_rate_limit_low(rate: RateLimitTracker) -> bool:
-    """
-    Print a visible rich warning when remaining requests are critically low.
-    Returns True if the warning was shown so callers can act on it.
-
-    Separated from log_rate_limit so it can be tested independently
-    and so the rich warning appears in the report flow rather than
-    mixed into logging output.
-    """
-    s = rate.snapshot()
+    s         = rate.snapshot()
     remaining = s["remaining"]
-
     if remaining is None:
         return False
-
     if remaining == 0:
         console.print(
             "\n[bold red]✗ Rate limit exhausted.[/bold red] "
@@ -91,7 +79,6 @@ def warn_if_rate_limit_low(rate: RateLimitTracker) -> bool:
             "[dim]Set GITHUB_TOKEN for 5,000 requests/hour.[/dim]"
         )
         return True
-
     if remaining < RATE_LIMIT_WARN_THRESHOLD:
         console.print(
             f"\n[bold yellow]⚠ Rate limit low:[/bold yellow] "
@@ -100,7 +87,6 @@ def warn_if_rate_limit_low(rate: RateLimitTracker) -> bool:
             "[dim]Set GITHUB_TOKEN for 5,000 requests/hour.[/dim]"
         )
         return True
-
     return False
 
 
@@ -116,16 +102,6 @@ async def _fetch_all(
     analytics_since: datetime,
     logger: logging.Logger,
 ) -> tuple[Repo, list[Commit], list[Issue], list[PullRequest], list[Release]]:
-    """
-    Fetch all repository data concurrently with a live progress spinner.
-
-    Failure policy:
-      - repo:    hard failure — raises immediately
-      - others:  soft failure — logs warning, returns empty list
-
-    analytics_since is computed in run() and passed in so the same
-    value is available to the analytics engine without recomputing.
-    """
     commit_limit = max(cli_args.limit, ANALYTICS_COMMIT_FLOOR)
     issue_limit  = max(cli_args.limit, ANALYTICS_ISSUE_FLOOR)
     pr_limit     = max(cli_args.limit, ANALYTICS_PR_FLOOR)
@@ -161,23 +137,31 @@ async def _fetch_all(
                 "repo",
             ),
             tracked(
-                fetch_commits(session, sem, cli_args.username, cli_args.repo_name, rate,
-                              since=analytics_since, limit=commit_limit),
+                fetch_commits(
+                    session, sem, cli_args.username, cli_args.repo_name, rate,
+                    since=analytics_since, limit=commit_limit,
+                ),
                 "commits",
             ),
             tracked(
-                fetch_issues(session, sem, cli_args.username, cli_args.repo_name, rate,
-                             since=analytics_since, limit=issue_limit, state="all"),
+                fetch_issues(
+                    session, sem, cli_args.username, cli_args.repo_name, rate,
+                    since=analytics_since, limit=issue_limit, state="all",
+                ),
                 "issues",
             ),
             tracked(
-                fetch_prs(session, sem, cli_args.username, cli_args.repo_name, rate,
-                          since=analytics_since, limit=pr_limit, state="all"),
+                fetch_prs(
+                    session, sem, cli_args.username, cli_args.repo_name, rate,
+                    since=analytics_since, limit=pr_limit, state="all",
+                ),
                 "prs",
             ),
             tracked(
-                fetch_releases(session, sem, cli_args.username, cli_args.repo_name, rate,
-                               since=analytics_since, limit=cli_args.limit),
+                fetch_releases(
+                    session, sem, cli_args.username, cli_args.repo_name, rate,
+                    since=analytics_since, limit=cli_args.limit,
+                ),
                 "releases",
             ),
             return_exceptions=True,
@@ -241,14 +225,7 @@ async def run(argv=None) -> int:
     log_rate_limit(logger, rate)
     warn_if_rate_limit_low(rate)
 
-    # ── Stage 1: raw report ──
-    reporter.print_repo_header(repo)
-    reporter.print_commit_summary(commits, cli_args.since)
-    reporter.print_issue_summary(issues)
-    reporter.print_pr_summary(prs)
-    reporter.print_release_summary(releases)
-
-    # ── Stage 2: analytics and health score ──
+    # ── Compute analytics ──
     metrics = MetricsComputer().compute(
         commits        = commits,
         issues         = issues,
@@ -258,7 +235,23 @@ async def run(argv=None) -> int:
         analysis_since = analytics_since,
     )
     score = HealthScorer().score(metrics)
-    reporter.print_health_score(score)
+    flags = RiskDetector().evaluate(metrics)
+
+    # ── Build report ──
+    report         = RepoReport(
+        repo     = repo,
+        commits  = commits,
+        issues   = issues,
+        prs      = prs,
+        releases = releases,
+        since    = cli_args.since,
+        metrics  = metrics,
+        score    = score,
+        flags    = flags,
+    )
+
+    # ── Render ──
+    Reporter(console).render(report, fmt=cli_args.output_format)
 
     return 0
 
