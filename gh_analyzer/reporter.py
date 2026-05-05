@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections import Counter
 
@@ -26,17 +26,16 @@ class RepoReport:
     Analytics are computed once in run() and passed in here.
     The reporter is a pure presentation layer — no computation happens here.
     """
-    repo:     Repo
-    commits:  list[Commit]
-    issues:   list[Issue]
-    prs:      list[PullRequest]
-    releases: list[Release]
-    since:    datetime
-
-    # Computed results — set after construction in run()
-    metrics:  object = None   # HealthMetrics
-    score:    object = None   # HealthScore
-    flags:    list   = None   # list[RiskFlag]
+    repo:       Repo
+    commits:    list[Commit]
+    issues:     list[Issue]
+    prs:        list[PullRequest]
+    releases:   list[Release]
+    since:      datetime
+    metrics:    object       = None   # HealthMetrics
+    score:      object       = None   # HealthScore
+    flags:      list         = None   # list[RiskFlag]
+    ai_summary: str | None   = None   # Gemini narrative summary, None if not requested
 
     def __post_init__(self):
         if self.flags is None:
@@ -46,8 +45,7 @@ class RepoReport:
         """
         Serialize to summary JSON.
         Contains computed insights, not raw data dumps.
-        Raw commit/issue/PR lists are omitted — those are available
-        directly from the GitHub API. Our value-add is the analytics.
+        ai_summary is always included — null when not requested.
         """
         result: dict = {
             "repo": {
@@ -60,17 +58,17 @@ class RepoReport:
                 "url":         self.repo.url,
             },
             "summary": {
-                "commits":              len(self.commits),
-                "unique_authors":       len({
+                "commits":        len(self.commits),
+                "unique_authors": len({
                     c.author_login or c.author_name or "unknown"
                     for c in self.commits
                 }),
-                "issues_total":         len(self.issues),
-                "issues_open":          sum(1 for i in self.issues if i.is_open),
-                "issues_closed":        sum(1 for i in self.issues if not i.is_open),
-                "prs_total":            len(self.prs),
-                "prs_merged":           sum(1 for p in self.prs if p.is_merged),
-                "releases_total":       len(self.releases),
+                "issues_total":   len(self.issues),
+                "issues_open":    sum(1 for i in self.issues if i.is_open),
+                "issues_closed":  sum(1 for i in self.issues if not i.is_open),
+                "prs_total":      len(self.prs),
+                "prs_merged":     sum(1 for p in self.prs if p.is_merged),
+                "releases_total": len(self.releases),
             },
         }
 
@@ -102,10 +100,10 @@ class RepoReport:
 
         if self.metrics is not None:
             result["trend"] = {
-                "commit_trend_pct":  self.metrics.commit_trend_pct,
-                "current_window":    self.metrics.current_window.commit_count,
-                "prior_window":      self.metrics.prior_window.commit_count,
-                "low_confidence":    self.metrics.current_window.low_confidence,
+                "commit_trend_pct": self.metrics.commit_trend_pct,
+                "current_window":   self.metrics.current_window.commit_count,
+                "prior_window":     self.metrics.prior_window.commit_count,
+                "low_confidence":   self.metrics.current_window.low_confidence,
             }
 
         if self.flags:
@@ -118,6 +116,9 @@ class RepoReport:
                 for f in self.flags
             ]
 
+        # Always include ai_summary key — null when not requested
+        result["ai_summary"] = self.ai_summary
+
         return result
 
 
@@ -129,9 +130,6 @@ class Reporter:
     """
     Pure presentation layer. Renders a RepoReport in the requested format.
     No analytics or business logic lives here.
-
-    Format dispatch is centralised in render() so adding a new format
-    (markdown, csv) means adding one branch, not touching rendering methods.
     """
 
     def __init__(self, con: Console | None = None):
@@ -157,6 +155,9 @@ class Reporter:
 
         if report.flags:
             self._print_risk_flags(report.flags)
+
+        if report.ai_summary:
+            self._print_ai_summary(report.ai_summary)
 
     # ── section printers ─────────────────
 
@@ -367,4 +368,14 @@ class Reporter:
             self.console.print(
                 f"  [{color}]{icon}[/{color}] {flag.message}"
             )
+        self.console.print()
+
+    def _print_ai_summary(self, summary: str) -> None:
+        self.console.print(Panel(
+            summary,
+            title="[bold cyan]AI Analysis[/bold cyan]",
+            border_style="cyan",
+            expand=False,
+            padding=(1, 2),
+        ))
         self.console.print()

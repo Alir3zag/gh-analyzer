@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 
 import aiohttp
@@ -24,6 +25,7 @@ from gh_analyzer.exceptions import GitHubAPIError
 from gh_analyzer.analytics import MetricsComputer, HealthScorer
 from gh_analyzer.risk import RiskDetector
 from gh_analyzer.reporter import RepoReport, Reporter
+from gh_analyzer.ai_summary import generate_summary
 
 # ─────────────────────────────────────────
 # Constants
@@ -237,17 +239,33 @@ async def run(argv=None) -> int:
     score = HealthScorer().score(metrics)
     flags = RiskDetector().evaluate(metrics)
 
+    # ── AI summary (optional, flag-gated) ──
+    ai_summary = None
+    if cli_args.ai_summary:
+        console.print("[dim]Generating AI summary...[/dim]")
+        ai_summary = generate_summary(metrics, score, flags)
+        if ai_summary is None:
+            if not os.getenv("GEMINI_API_KEY"):
+                console.print(
+                    "[dim]⚠ --ai-summary requires GEMINI_API_KEY env var — skipping.[/dim]"
+                )
+            else:
+                console.print(
+                    "[dim]⚠ AI summary unavailable — Gemini API call failed.[/dim]"
+                )
+
     # ── Build report ──
-    report         = RepoReport(
-        repo     = repo,
-        commits  = commits,
-        issues   = issues,
-        prs      = prs,
-        releases = releases,
-        since    = cli_args.since,
-        metrics  = metrics,
-        score    = score,
-        flags    = flags,
+    report = RepoReport(
+        repo       = repo,
+        commits    = commits,
+        issues     = issues,
+        prs        = prs,
+        releases   = releases,
+        since      = cli_args.since,
+        metrics    = metrics,
+        score      = score,
+        flags      = flags,
+        ai_summary = ai_summary,
     )
 
     # ── Render ──

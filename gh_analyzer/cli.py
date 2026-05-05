@@ -38,13 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Show top N results (optional).")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable verbose logging.")
-
     parser.add_argument("--token", default=None, metavar="TOKEN",
                         help="GitHub token (overrides GITHUB_TOKEN). Warning: may be saved in shell history.")
     parser.add_argument("--no-token", action="store_true",
                         help="Ignore any token and run unauthenticated (useful for testing rate limits).")
     parser.add_argument("--validate-token", action="store_true",
                         help="Validate token once via GitHub /user endpoint before running analysis.")
+    parser.add_argument("--ai-summary", action="store_true",
+                        help="Append an AI-generated narrative summary (requires GEMINI_API_KEY env var).")
 
     return parser
 
@@ -66,13 +67,14 @@ def from_args(argv: list[str] | None = None) -> CLIArgs:
         parser.error("--validate-token requires a token (use --token or set GITHUB_TOKEN)")
 
     return CLIArgs(
-        username=username,
-        repo_name=repo_name,
-        since=since_dt,
-        limit=args.limit,
-        output_format=args.output_format,
-        top=args.top,
-        verbose=args.verbose,
-        token=token,
-        validate_token=args.validate_token,
+        username       = username,
+        repo_name      = repo_name,
+        since          = since_dt,
+        limit          = args.limit,
+        output_format  = args.output_format,
+        top            = args.top,
+        verbose        = args.verbose,
+        token          = token,
+        validate_token = args.validate_token,
+        ai_summary     = args.ai_summary,
     )
