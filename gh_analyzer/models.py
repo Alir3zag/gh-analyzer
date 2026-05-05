@@ -14,6 +14,7 @@ class CLIArgs:
     verbose: bool = False
     token: str | None = None
     validate_token: bool = False
+    ai_summary: bool = False
 
     def __post_init__(self) -> None:
         if self.output_format not in {"text", "json", "table"}:
