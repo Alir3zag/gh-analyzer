@@ -1,3 +1,5 @@
+[📄 Resume](./Alireza_Eftekhar_CV.pdf)
+
 # gh-analyzer
 
 A command-line tool that scores GitHub repository health across commit momentum, bus factor, issue resolution, PR latency, and release cadence.
