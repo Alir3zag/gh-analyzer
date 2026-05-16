@@ -6,6 +6,8 @@
 ![Python versions](https://img.shields.io/pypi/pyversions/gh-analyzer)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+> Tested across Python 3.11, 3.12, and 3.13 with 61 unit tests covering the analytics engine, risk detector, and rate limit handling.
+
 A command-line tool that scores GitHub repository health across commit momentum, bus factor, issue resolution, PR latency, and release cadence.
 
 ## Installation
@@ -103,6 +105,9 @@ set GEMINI_API_KEY=your_key_here      # Windows
 
 ```
 gh-analyzer/
+├── .github/
+│   └── workflows/
+│       └── test.yml     # GitHub Actions CI
 ├── gh_analyzer/
 │   ├── main.py          # Entry point and fetch orchestration
 │   ├── cli.py           # Argument parsing
@@ -112,13 +117,33 @@ gh-analyzer/
 │   ├── analytics.py     # Health scoring engine
 │   ├── risk.py          # Risk flag detector
 │   ├── ai_summary.py    # Gemini AI narrative summary layer
-│   └── reporter.py      # Rich terminal output and JSON serialization
+│   ├── reporter.py      # Rich terminal output and JSON serialization
+│   └── cache.py         # API response caching layer
 ├── tests/
+│   ├── test_analytics.py
 │   ├── test_risk.py
 │   └── test_rate_limit_warning.py
 ├── pyproject.toml
 └── README.md
 ```
+
+## Development
+
+Clone the repo and install in development mode with Poetry:
+
+```bash
+git clone https://github.com/Alir3zag/gh-analyzer
+cd gh-analyzer
+poetry install --with dev
+```
+
+Run the test suite (61 tests covering analytics, risk detection, and rate limiting):
+
+```bash
+poetry run pytest -v
+```
+
+Tests run automatically on every push via GitHub Actions across Python 3.11, 3.12, and 3.13.
 
 ## License
 
