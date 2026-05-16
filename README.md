@@ -1,6 +1,10 @@
 [📄 Resume](./Alireza_Eftekhar_CV.pdf)
 
 # gh-analyzer
+![Tests](https://github.com/Alir3zag/gh-analyzer/actions/workflows/test.yml/badge.svg)
+![PyPI version](https://img.shields.io/pypi/v/gh-analyzer)
+![Python versions](https://img.shields.io/pypi/pyversions/gh-analyzer)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 A command-line tool that scores GitHub repository health across commit momentum, bus factor, issue resolution, PR latency, and release cadence.
 
