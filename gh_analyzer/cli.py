@@ -38,9 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Show top N results (optional).")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable verbose logging.")
-    parser.add_argument("--token", default=None, metavar="TOKEN",
+    # B2 FIX: enforce mutual exclusion between --token and --no-token
+    token_group = parser.add_mutually_exclusive_group()
+    token_group.add_argument("--token", default=None, metavar="TOKEN",
                         help="GitHub token (overrides GITHUB_TOKEN). Warning: may be saved in shell history.")
-    parser.add_argument("--no-token", action="store_true",
+    token_group.add_argument("--no-token", action="store_true",
                         help="Ignore any token and run unauthenticated (useful for testing rate limits).")
     parser.add_argument("--validate-token", action="store_true",
                         help="Validate token once via GitHub /user endpoint before running analysis.")
