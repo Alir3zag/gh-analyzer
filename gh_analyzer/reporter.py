@@ -135,7 +135,7 @@ class Reporter:
 
     def render(self, report: RepoReport, fmt: str) -> None:
         if fmt == "json":
-            self.console.print(json.dumps(report.to_dict(), indent=2, default=str), highlight=False)
+            print(json.dumps(report.to_dict(), indent=2, default=str))
         elif fmt == "table":
             self._render_table(report)
         else:
@@ -309,7 +309,7 @@ class Reporter:
         t.add_row("Most active author", f"{top_author} ({top_count} commits)")
         t.add_row(
             "Date range",
-            f"{commits[-1].date:%Y-%m-%d} to {commits[0].date:%Y-%m-%d}",
+            f"{min(c.date for c in commits):%Y-%m-%d} to {max(c.date for c in commits):%Y-%m-%d}",
         )
         self.console.print("[bold]Commits[/bold]")
         self.console.print(t)
