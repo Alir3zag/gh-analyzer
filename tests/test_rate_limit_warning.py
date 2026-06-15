@@ -20,7 +20,7 @@ def _capture(rate: RateLimitTracker) -> tuple[bool, str]:
     from rich.console import Console
     buffer = io.StringIO()
     cap    = Console(file=buffer, highlight=False)
-    with patch("gh_analyzer.main.console", cap):
+    with patch("gh_analyzer.main.err_console", cap):
         shown = warn_if_rate_limit_low(rate)
     return shown, buffer.getvalue()
 
