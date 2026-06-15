@@ -8,12 +8,15 @@ class CLIArgs:
     username: str
     repo_name: str
     since: datetime | None = None
+    since_days: int = 30
     limit: int | None = None
     output_format: str = "text"
+    output_file: str | None = None
     top: int | None = None
     verbose: bool = False
     token: str | None = None
     validate_token: bool = False
+    no_cache: bool = False
     ai_summary: bool = False
 
     def __post_init__(self) -> None:
@@ -76,9 +79,9 @@ class Commit:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Commit":
-        commit_obj = data.get("commit") or {}
+        commit_obj    = data.get("commit") or {}
         commit_author = commit_obj.get("author") or {}
-        api_author = data.get("author") or {}
+        api_author    = data.get("author") or {}
 
         date_str = commit_author.get("date")
         if not isinstance(date_str, str):
@@ -96,11 +99,10 @@ class Commit:
 
     def __str__(self) -> str:
         who = self.author_login or self.author_name or "unknown"
-        msg = self.message.replace("\n", " ").strip()  # Normalize to single line
-        # Truncate to 80 characters for concise display
+        msg = self.message.replace("\n", " ").strip()
         max_len = 80
         if len(msg) > max_len:
-            msg = msg[: max_len - 1].rstrip() + "…"
+            msg = msg[: max_len - 1].rstrip() + "..."
         return f"{self.short_sha} - {msg} (by {who} on {self.date:%Y-%m-%d})"
 
 
@@ -130,11 +132,9 @@ class Issue:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Issue":
-        # GitHub's issues endpoint also returns PRs callers must filter
-        # by checking `data.get("pull_request") is None` before calling this.
         created_at_str = data.get("created_at")
         updated_at_str = data.get("updated_at")
-        closed_at_str = data.get("closed_at")
+        closed_at_str  = data.get("closed_at")
 
         if not isinstance(created_at_str, str):
             raise ValueError("Issue payload missing/invalid created_at")
@@ -170,7 +170,7 @@ class PullRequest:
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None
-    merged_at: datetime | None    # None if not merged
+    merged_at: datetime | None
     url: str
 
     @property
@@ -188,8 +188,8 @@ class PullRequest:
     def from_api(cls, data: dict[str, Any]) -> "PullRequest":
         created_at_str = data.get("created_at")
         updated_at_str = data.get("updated_at")
-        closed_at_str = data.get("closed_at")
-        merged_at_str = data.get("merged_at")
+        closed_at_str  = data.get("closed_at")
+        merged_at_str  = data.get("merged_at")
 
         if not isinstance(created_at_str, str):
             raise ValueError("PullRequest payload missing/invalid created_at")
@@ -250,7 +250,7 @@ class PRReview:
     id: int
     pr_number: int
     reviewer_login: str | None
-    state: str                   # "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED"
+    state: str   # "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED"
     submitted_at: datetime
     url: str
 

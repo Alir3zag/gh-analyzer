@@ -20,7 +20,7 @@ class RepoReport:
     """
     Single source of truth for everything the reporter renders.
     Analytics are computed once in run() and passed in here.
-    The reporter is a pure presentation layer — no computation happens here.
+    The reporter is a pure presentation layer -- no computation happens here.
     """
     repo:       Repo
     commits:    list[Commit]
@@ -28,6 +28,7 @@ class RepoReport:
     prs:        list[PullRequest]
     releases:   list[Release]
     since:      datetime
+    since_days: int = 30
     metrics:    object       = None   # HealthMetrics
     score:      object       = None   # HealthScore
     flags:      list         = None   # list[RiskFlag]
@@ -40,7 +41,7 @@ class RepoReport:
     def to_dict(self) -> dict:
         """
         Serialize to summary JSON.
-        ai_summary is always included — null when not requested.
+        ai_summary is always included -- null when not requested.
         """
         result: dict = {
             "repo": {
@@ -52,6 +53,11 @@ class RepoReport:
                 "open_issues": self.repo.open_issues,
                 "language":    self.repo.language,
                 "url":         self.repo.url,
+            },
+            "analysis_window": {
+                "days":  self.since_days,
+                "from":  self.since.strftime("%Y-%m-%d"),
+                "to":    datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             },
             "summary": {
                 "commits":        len(self.commits),
@@ -112,7 +118,7 @@ class RepoReport:
                 for f in self.flags
             ]
 
-        # Always include ai_summary key — null when not requested
+        # Always include ai_summary key -- null when not requested
         result["ai_summary"] = self.ai_summary
 
         return result
@@ -129,10 +135,8 @@ class Reporter:
 
     def render(self, report: RepoReport, fmt: str) -> None:
         if fmt == "json":
-            print(json.dumps(report.to_dict(), indent=2, default=str))
+            self.console.print(json.dumps(report.to_dict(), indent=2, default=str), highlight=False)
         elif fmt == "table":
-            # B5 FIX: --format table renders a compact summary table,
-            # distinct from the full rich text output.
             self._render_table(report)
         else:
             self._render_rich(report)
@@ -140,6 +144,7 @@ class Reporter:
     # ── rich terminal renderer ────────────────────────────────
 
     def _render_rich(self, report: RepoReport) -> None:
+        self._print_analysis_window(report)
         self._print_repo_header(report.repo)
         self._print_commit_summary(report.commits, report.since)
         self._print_issue_summary(report.issues)
@@ -159,11 +164,12 @@ class Reporter:
 
     def _render_table(self, report: RepoReport) -> None:
         """
-        Compact summary table — one row of key metrics per signal.
+        Compact summary table -- one row of key metrics per signal.
         Useful for comparing multiple repos side-by-side in scripts.
         """
+        window_str = f"{report.since_days}d  ({report.since:%Y-%m-%d} to {datetime.now(timezone.utc):%Y-%m-%d})"
         t = Table(
-            title=f"[bold]{report.repo.full_name}[/bold]",
+            title=f"[bold]{report.repo.full_name}[/bold]  [dim]{window_str}[/dim]",
             box=box.SIMPLE_HEAVY,
             show_header=True,
             header_style="bold cyan",
@@ -175,7 +181,7 @@ class Reporter:
         # Repo metadata row
         t.add_row(
             "Repository",
-            f"★{report.repo.stars:,}  ⑂{report.repo.forks:,}  ⚑{report.repo.open_issues:,} open",
+            f"*{report.repo.stars:,}  f{report.repo.forks:,}  {report.repo.open_issues:,} open issues",
             "",
         )
 
@@ -184,7 +190,7 @@ class Reporter:
         trend_str = ""
         if report.metrics and report.metrics.commit_trend_pct is not None:
             pct = report.metrics.commit_trend_pct
-            arrow = "↑" if pct >= 0 else "↓"
+            arrow = "^" if pct >= 0 else "v"
             trend_str = f" ({arrow}{abs(pct):.0f}%)"
         commit_score = self._component_score_str(report.score, "commit_momentum")
         t.add_row("Commit momentum", f"{commit_count} commits{trend_str}", commit_score)
@@ -248,7 +254,7 @@ class Reporter:
                 return f"{c.raw_score:.0f}"
         return "N/A"
 
-    # ── section printers (shared between text and table) ─────
+    # ── section printers ─────────────────────────────────────
 
     def _make_table(self, *headers: str) -> Table:
         t = Table(box=box.SIMPLE_HEAVY, show_header=True, header_style="bold cyan")
@@ -263,15 +269,24 @@ class Reporter:
             return f"{hours:.1f}h"
         return f"{hours / 24:.1f}d"
 
+    def _print_analysis_window(self, report: RepoReport) -> None:
+        """Print a single dim line showing the analysis window before the repo header."""
+        now = datetime.now(timezone.utc)
+        self.console.print(
+            f"[dim]Analyzing last {report.since_days} days "
+            f"({report.since:%Y-%m-%d} to {now:%Y-%m-%d})[/dim]"
+        )
+        self.console.print()
+
     def _print_repo_header(self, repo: Repo) -> None:
         desc     = repo.description or "No description."
         language = repo.language or "Unknown"
         content  = (
             f"[bold white]{repo.full_name}[/bold white]\n"
             f"[dim]{desc}[/dim]\n\n"
-            f"[yellow]★ {repo.stars:,}[/yellow]  "
-            f"[blue]⑂ {repo.forks:,}[/blue]  "
-            f"[red]⚑ {repo.open_issues:,} open issues[/red]  "
+            f"[yellow]* {repo.stars:,}[/yellow]  "
+            f"[blue]f {repo.forks:,}[/blue]  "
+            f"[red]{repo.open_issues:,} open issues[/red]  "
             f"[green]{language}[/green]"
         )
         self.console.print(Panel(content, expand=False, border_style="dim"))
@@ -294,7 +309,7 @@ class Reporter:
         t.add_row("Most active author", f"{top_author} ({top_count} commits)")
         t.add_row(
             "Date range",
-            f"{commits[-1].date:%Y-%m-%d} → {commits[0].date:%Y-%m-%d}",
+            f"{commits[-1].date:%Y-%m-%d} to {commits[0].date:%Y-%m-%d}",
         )
         self.console.print("[bold]Commits[/bold]")
         self.console.print(t)
@@ -303,7 +318,7 @@ class Reporter:
             top_t = self._make_table("Author", "Commits", "Share")
             for author, count in author_counts.most_common(5):
                 share = count / len(commits) * 100
-                bar   = "█" * int(share / 5)
+                bar   = "#" * int(share / 5)
                 top_t.add_row(author, str(count), f"{bar} {share:.1f}%")
             self.console.print("[dim]Top contributors[/dim]")
             self.console.print(top_t)
@@ -402,11 +417,11 @@ class Reporter:
                     c.name,
                     "[dim]no data[/dim]",
                     f"{c.weight:.0%}",
-                    "[dim]—[/dim]",
+                    "[dim]--[/dim]",
                 )
             else:
                 bar_len = int(c.raw_score / 10)
-                bar     = "█" * bar_len + "░" * (10 - bar_len)
+                bar     = "#" * bar_len + "." * (10 - bar_len)
                 t.add_row(
                     c.name,
                     f"{bar} {c.raw_score:.0f}",
@@ -426,7 +441,7 @@ class Reporter:
             )
 
         if metrics is not None and metrics.commit_trend_pct is not None:
-            direction   = "↑" if metrics.commit_trend_pct >= 0 else "↓"
+            direction   = "^" if metrics.commit_trend_pct >= 0 else "v"
             trend_color = "green" if metrics.commit_trend_pct >= 0 else "red"
             window_days = int((metrics.display_since - metrics.analysis_since).days)
             self.console.print(
@@ -443,15 +458,15 @@ class Reporter:
         self.console.print()
 
     def _print_risk_flags(self, flags: list) -> None:
-        icons  = {"ERROR": "✗", "WARN": "⚠", "OK": "✔"}
+        icons  = {"ERROR": "x", "WARN": "!", "OK": "v"}
         colors = {"ERROR": "red", "WARN": "yellow", "OK": "green"}
 
         self.console.print("[bold]Risk Assessment[/bold]")
         for flag in flags:
-            icon  = icons.get(flag.level, "•")
+            icon  = icons.get(flag.level, "-")
             color = colors.get(flag.level, "white")
             self.console.print(
-                f"  [{color}]{icon}[/{color}] {flag.message}"
+                f"  [{color}]{icon}[/{color}] [{color}]{flag.level}[/{color}]  {flag.message}"
             )
         self.console.print()
 

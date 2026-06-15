@@ -33,12 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Maximum number of results (default: 100).")
     parser.add_argument("--format", dest="output_format",
                         choices=["text", "json", "table"], default="text",
-                        help="Output format (text/table/json).")
+                        help="Output format: text (default), table (compact), or json.")
+    parser.add_argument("--output", dest="output_file", default=None, metavar="FILE",
+                        help="Write output to FILE instead of stdout (useful with --format json).")
     parser.add_argument("--top", type=positive_int, default=None, metavar="N",
                         help="Show top N results (optional).")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable verbose logging.")
-    # B2 FIX: enforce mutual exclusion between --token and --no-token
+    # Mutual exclusion between --token and --no-token
     token_group = parser.add_mutually_exclusive_group()
     token_group.add_argument("--token", default=None, metavar="TOKEN",
                         help="GitHub token (overrides GITHUB_TOKEN). Warning: may be saved in shell history.")
@@ -46,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Ignore any token and run unauthenticated (useful for testing rate limits).")
     parser.add_argument("--validate-token", action="store_true",
                         help="Validate token once via GitHub /user endpoint before running analysis.")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Bypass the local cache and fetch fresh data from GitHub.")
     parser.add_argument("--ai-summary", action="store_true",
                         help="Append an AI-generated narrative summary (requires GEMINI_API_KEY env var).")
 
@@ -72,11 +76,14 @@ def from_args(argv: list[str] | None = None) -> CLIArgs:
         username       = username,
         repo_name      = repo_name,
         since          = since_dt,
+        since_days     = args.since,
         limit          = args.limit,
         output_format  = args.output_format,
+        output_file    = args.output_file,
         top            = args.top,
         verbose        = args.verbose,
         token          = token,
         validate_token = args.validate_token,
+        no_cache       = args.no_cache,
         ai_summary     = args.ai_summary,
     )

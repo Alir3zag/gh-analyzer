@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 
 import aiohttp
@@ -224,13 +225,16 @@ async def run(argv=None) -> int:
     sem     = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     rate    = RateLimitTracker()
     timeout = aiohttp.ClientTimeout(total=30, connect=5, sock_read=20)
-    cache   = ResponseCache()
+
+    # --no-cache bypasses disk cache entirely; otherwise use the default cache.
+    cache: ResponseCache | None = None if cli_args.no_cache else ResponseCache()
+    if cli_args.no_cache:
+        logger.debug("Cache bypassed (--no-cache).")
 
     async with aiohttp.ClientSession(
         timeout=timeout,
         headers=build_headers(cli_args.token),
     ) as session:
-        # ── B1 FIX: implement --validate-token ──────────────────
         if cli_args.validate_token:
             try:
                 username = await api_validate_token(session, sem, rate)
@@ -289,6 +293,7 @@ async def run(argv=None) -> int:
         prs        = prs,
         releases   = releases,
         since      = cli_args.since,
+        since_days = cli_args.since_days,
         metrics    = metrics,
         score      = score,
         flags      = flags,
@@ -296,7 +301,17 @@ async def run(argv=None) -> int:
     )
 
     # ── Render ──
-    Reporter(console).render(report, fmt=cli_args.output_format)
+    # --output FILE writes to disk; otherwise use stdout console.
+    if cli_args.output_file:
+        try:
+            file_console = Console(file=open(cli_args.output_file, "w", encoding="utf-8"))
+            Reporter(file_console).render(report, fmt=cli_args.output_format)
+            err_console.print(f"[green]Output written to {cli_args.output_file}[/green]")
+        except OSError as e:
+            err_console.print(f"[bold red]Could not write to {cli_args.output_file}:[/bold red] {e}")
+            return 1
+    else:
+        Reporter(console).render(report, fmt=cli_args.output_format)
 
     return 0
 
