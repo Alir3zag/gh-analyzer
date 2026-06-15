@@ -15,10 +15,6 @@ from gh_analyzer.models import Repo, Commit, Issue, PullRequest, Release
 console = Console()
 
 
-# ─────────────────────────────────────────
-# RepoReport dataclass
-# ─────────────────────────────────────────
-
 @dataclass
 class RepoReport:
     """
@@ -35,7 +31,7 @@ class RepoReport:
     metrics:    object       = None   # HealthMetrics
     score:      object       = None   # HealthScore
     flags:      list         = None   # list[RiskFlag]
-    ai_summary: str | None   = None   # Gemini narrative summary, None if not requested
+    ai_summary: str | None   = None
 
     def __post_init__(self):
         if self.flags is None:
@@ -44,12 +40,12 @@ class RepoReport:
     def to_dict(self) -> dict:
         """
         Serialize to summary JSON.
-        Contains computed insights, not raw data dumps.
         ai_summary is always included — null when not requested.
         """
         result: dict = {
             "repo": {
-                "name":        self.repo.full_name,
+                "name":        self.repo.name,
+                "full_name":   self.repo.full_name,
                 "description": self.repo.description,
                 "stars":       self.repo.stars,
                 "forks":       self.repo.forks,
@@ -122,10 +118,6 @@ class RepoReport:
         return result
 
 
-# ─────────────────────────────────────────
-# Reporter class
-# ─────────────────────────────────────────
-
 class Reporter:
     """
     Pure presentation layer. Renders a RepoReport in the requested format.
@@ -138,10 +130,14 @@ class Reporter:
     def render(self, report: RepoReport, fmt: str) -> None:
         if fmt == "json":
             print(json.dumps(report.to_dict(), indent=2, default=str))
+        elif fmt == "table":
+            # B5 FIX: --format table renders a compact summary table,
+            # distinct from the full rich text output.
+            self._render_table(report)
         else:
             self._render_rich(report)
 
-    # ── rich terminal renderer ────────────
+    # ── rich terminal renderer ────────────────────────────────
 
     def _render_rich(self, report: RepoReport) -> None:
         self._print_repo_header(report.repo)
@@ -159,7 +155,100 @@ class Reporter:
         if report.ai_summary:
             self._print_ai_summary(report.ai_summary)
 
-    # ── section printers ─────────────────
+    # ── table renderer ────────────────────────────────────────
+
+    def _render_table(self, report: RepoReport) -> None:
+        """
+        Compact summary table — one row of key metrics per signal.
+        Useful for comparing multiple repos side-by-side in scripts.
+        """
+        t = Table(
+            title=f"[bold]{report.repo.full_name}[/bold]",
+            box=box.SIMPLE_HEAVY,
+            show_header=True,
+            header_style="bold cyan",
+        )
+        t.add_column("Signal")
+        t.add_column("Value", justify="right")
+        t.add_column("Score", justify="right")
+
+        # Repo metadata row
+        t.add_row(
+            "Repository",
+            f"★{report.repo.stars:,}  ⑂{report.repo.forks:,}  ⚑{report.repo.open_issues:,} open",
+            "",
+        )
+
+        # Commit momentum
+        commit_count = len(report.commits)
+        trend_str = ""
+        if report.metrics and report.metrics.commit_trend_pct is not None:
+            pct = report.metrics.commit_trend_pct
+            arrow = "↑" if pct >= 0 else "↓"
+            trend_str = f" ({arrow}{abs(pct):.0f}%)"
+        commit_score = self._component_score_str(report.score, "commit_momentum")
+        t.add_row("Commit momentum", f"{commit_count} commits{trend_str}", commit_score)
+
+        # Bus factor
+        if report.metrics and report.metrics.bus_factor:
+            bf = report.metrics.bus_factor
+            bf_val = f"HHI={bf.hhi:.3f}  top={bf.top_author_pct:.0f}%"
+        else:
+            bf_val = "no data"
+        t.add_row("Bus factor", bf_val, self._component_score_str(report.score, "bus_factor"))
+
+        # Issue health
+        if report.metrics and report.metrics.issues.available:
+            iss = report.metrics.issues
+            iss_val = f"{iss.resolution_rate * 100:.0f}% resolved ({iss.closed_count}/{iss.total})"
+        else:
+            iss_val = "no data"
+        t.add_row("Issue health", iss_val, self._component_score_str(report.score, "issue_health"))
+
+        # PR latency
+        if report.metrics and report.metrics.prs.available and report.metrics.prs.avg_merge_hours is not None:
+            pr_val = self._hours_to_human(report.metrics.prs.avg_merge_hours) + " avg merge"
+        else:
+            pr_val = "no data"
+        t.add_row("PR latency", pr_val, self._component_score_str(report.score, "pr_latency"))
+
+        # Release cadence
+        if report.metrics and report.metrics.releases.available:
+            rel_val = f"{report.metrics.releases.days_since_latest}d since last release"
+        else:
+            rel_val = "no releases"
+        t.add_row("Release cadence", rel_val, self._component_score_str(report.score, "release_cadence"))
+
+        self.console.print(t)
+
+        # Health score summary line
+        if report.score is not None:
+            grade_color = {"A": "green", "B": "yellow", "C": "orange1", "D": "red"}
+            color = grade_color.get(report.score.grade, "white")
+            self.console.print(
+                f"\nHealth Score: [{color}]{report.score.value}/100  Grade {report.score.grade}[/{color}]"
+            )
+
+        # Risk flags (compact, one line each)
+        if report.flags:
+            self.console.print()
+            self._print_risk_flags(report.flags)
+
+        if report.ai_summary:
+            self._print_ai_summary(report.ai_summary)
+
+    def _component_score_str(self, score, signal_name: str) -> str:
+        """Return the raw score string for a named component, or 'N/A'."""
+        if score is None:
+            return "N/A"
+        for c in score.components:
+            if c.name == signal_name:
+                if c.raw_score is None:
+                    return "N/A"
+                return f"{c.raw_score:.0f}"
+        return "N/A"
+
+    # ── section printers (shared between text and table) ─────
 
     def _make_table(self, *headers: str) -> Table:
         t = Table(box=box.SIMPLE_HEAVY, show_header=True, header_style="bold cyan")
@@ -182,15 +271,13 @@ class Reporter:
             f"[dim]{desc}[/dim]\n\n"
             f"[yellow]★ {repo.stars:,}[/yellow]  "
             f"[blue]⑂ {repo.forks:,}[/blue]  "
-            f"[red]● {repo.open_issues:,} open issues[/red]  "
+            f"[red]⚑ {repo.open_issues:,} open issues[/red]  "
             f"[green]{language}[/green]"
         )
         self.console.print(Panel(content, expand=False, border_style="dim"))
         self.console.print()
 
-    def _print_commit_summary(
-        self, commits: list[Commit], since: datetime
-    ) -> None:
+    def _print_commit_summary(self, commits: list[Commit], since: datetime) -> None:
         if not commits:
             self.console.print("[dim]No commits found in analysis window.[/dim]\n")
             return
@@ -251,9 +338,7 @@ class Reporter:
 
     def _print_pr_summary(self, prs: list[PullRequest]) -> None:
         if not prs:
-            self.console.print(
-                "[dim]No pull requests found in analysis window.[/dim]\n"
-            )
+            self.console.print("[dim]No pull requests found in analysis window.[/dim]\n")
             return
 
         merged   = [pr for pr in prs if pr.is_merged]
@@ -341,7 +426,7 @@ class Reporter:
             )
 
         if metrics is not None and metrics.commit_trend_pct is not None:
-            direction   = "▲" if metrics.commit_trend_pct >= 0 else "▼"
+            direction   = "↑" if metrics.commit_trend_pct >= 0 else "↓"
             trend_color = "green" if metrics.commit_trend_pct >= 0 else "red"
             window_days = int((metrics.display_since - metrics.analysis_since).days)
             self.console.print(
@@ -358,7 +443,7 @@ class Reporter:
         self.console.print()
 
     def _print_risk_flags(self, flags: list) -> None:
-        icons  = {"ERROR": "✗", "WARN": "⚠", "OK": "✓"}
+        icons  = {"ERROR": "✗", "WARN": "⚠", "OK": "✔"}
         colors = {"ERROR": "red", "WARN": "yellow", "OK": "green"}
 
         self.console.print("[bold]Risk Assessment[/bold]")
