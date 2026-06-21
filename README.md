@@ -5,9 +5,12 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/gh-analyzer)](https://pypi.org/project/gh-analyzer/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Tested across Python 3.11, 3.12, and 3.13 with 61 unit tests covering the analytics engine, risk detector, and rate limit handling.
+> Before depending on an open-source library, you want to know if it's actively maintained, who owns the codebase, and whether issues get resolved. gh-analyzer answers that in seconds.
 
-A command-line tool that scores GitHub repository health across commit momentum, bus factor, issue resolution, PR latency, and release cadence.
+<!-- Add demo GIF here after recording -->
+<!-- ![gh-analyzer demo](docs/demo.gif) -->
+
+A command-line tool that scores GitHub repository health across commit momentum, bus factor, issue resolution, PR latency, and release cadence. Tested across Python 3.11, 3.12, and 3.13 with 61 unit tests.
 
 ---
 
@@ -18,6 +21,16 @@ pip install gh-analyzer
 ```
 
 Requires Python 3.11+.
+
+---
+
+## Quick start
+
+```
+gh-analyzer psf/requests
+gh-analyzer tiangolo/fastapi --format table
+gh-analyzer psf/requests --format json --output report.json
+```
 
 ---
 
@@ -83,91 +96,60 @@ gh-analyzer psf/requests --validate-token
 ```
 Analyzing last 30 days (2026-05-16 to 2026-06-15)
 
- psf/requests
- A simple, yet elegant, HTTP library.
-
- * 54,041  f 9,969  229 open issues  Python
+psf/requests — A simple, yet elegant, HTTP library.
+★ 54,041  ⑂ 9,969  229 open issues  Python
 
 Commits
-
-  Metric               Value
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Total commits        41
   Unique authors       14
   Most active author   nateprewitt (20 commits)
   Date range           2026-04-19 to 2026-06-09
 
-  Author                Commits   Share
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  nateprewitt           20        ######### 48.8%
-  dependabot            6         ## 14.6%
-  jorenham              3         # 7.3%
+  nateprewitt    20   ████████░  48.8%
+  dependabot      6   ██░        14.6%
+  jorenham        3   █░          7.3%
 
 Issues
-
-  Metric                Value
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Total issues          16
-  Open                  2
-  Closed                14
-  Resolution rate       87.5%
-  Avg resolution time   7.6h
+  Total issues         16
+  Resolution rate      87.5%
+  Avg resolution time  7.6h
 
 Pull Requests
-
-  Metric              Value
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Total PRs           129
-  Merged              38
-  Open                11
-  Merge rate          29.5%
-  Avg time to merge   12.0h
+  Total PRs            129
+  Merge rate           29.5%
+  Avg time to merge    12.0h
 
 Releases
-
-  Metric               Value
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Total releases       3
   Latest tag           v2.34.2
-  Latest release       2026-05-14
   Days since release   31
 
- Repository Health Score
- 56/100  Grade C
+Repository Health Score: 56/100  Grade C
 
-Score Breakdown
-
-  Signal            Score           Weight   Contribution
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  commit_momentum   .......... 4    30%      1.2
-  bus_factor        #######... 73   25%      18.2
-  issue_health      ########.. 88   20%      17.5
-  pr_latency        ########.. 80   15%      12.0
-  release_cadence   #######... 75   10%      7.5
-
-Bus factor:  HHI=0.273  top contributor: nateprewitt (48.8%)  total contributors: 14
-Commit trend:  v 67.7% vs prior 30-day window
+  commit_momentum   ░░░░░░░░░░  4    30%    1.2
+  bus_factor        ███████░░░ 73    25%   18.2
+  issue_health      ████████░░ 88    20%   17.5
+  pr_latency        ████████░░ 80    15%   12.0
+  release_cadence   ███████░░░ 75    10%    7.5
 
 Risk Assessment
-  x ERROR  MOMENTUM DROP: commit frequency down 68% vs prior period
-  v OK     ISSUE HEALTH: 88% resolution rate -- maintainer is responsive
+  ✗ ERROR  MOMENTUM DROP: commit frequency down 68% vs prior period
+  ✔ OK     ISSUE HEALTH: 88% resolution rate — maintainer is responsive
 ```
 
 ### Table output (`--format table`)
 
-Compact single-table summary, useful for quick comparisons:
+Compact single-table summary — useful for quickly comparing multiple repos:
 
 ```
-                psf/requests  30d (2026-05-16 to 2026-06-15)
+      psf/requests  30d (2026-05-16 to 2026-06-15)
 
-  Signal            Value                           Score
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Repository        *54,041  f9,969  229 open issues
-  Commit momentum   41 commits (v68%)                   4
-  Bus factor        HHI=0.273  top=49%                 73
-  Issue health      88% resolved (14/16)               88
-  PR latency        12.0h avg merge                    80
-  Release cadence   31d since last release             75
+  Signal            Value                        Score
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Commit momentum   41 commits (↓68%)                4
+  Bus factor        HHI=0.273  top=49%              73
+  Issue health      88% resolved (14/16)            88
+  PR latency        12.0h avg merge                 80
+  Release cadence   31d since last release          75
 
 Health Score: 56/100  Grade C
 ```
@@ -227,7 +209,7 @@ Health Score: 56/100  Grade C
   },
   "flags": [
     { "level": "ERROR", "code": "MOMENTUM_DROP_SEVERE", "message": "MOMENTUM DROP: commit frequency down 68% vs prior period" },
-    { "level": "OK",    "code": "ISSUE_HEALTH_GOOD",    "message": "ISSUE HEALTH: 88% resolution rate -- maintainer is responsive" }
+    { "level": "OK",    "code": "ISSUE_HEALTH_GOOD",    "message": "ISSUE HEALTH: 88% resolution rate — maintainer is responsive" }
   ],
   "ai_summary": null
 }
@@ -247,7 +229,7 @@ Health Score: 56/100  Grade C
 
 **Bus factor** uses the Herfindahl-Hirschman Index (HHI) to measure contributor concentration. HHI closer to 1.0 means one person dominates; closer to 0.0 means contributions are evenly distributed.
 
-**Missing signals** (e.g. a repo with no releases) are excluded and weights are renormalized — the score always reflects available data honestly.
+**Missing signals** (e.g. a repo with no releases) are excluded and weights are renormalized — the score always reflects available data honestly rather than penalizing repos for not using GitHub features.
 
 **Grades:** A (80–100) · B (60–79) · C (40–59) · D (0–39)
 
