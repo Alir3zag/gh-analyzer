@@ -8,7 +8,7 @@
 > Before depending on an open-source library, you want to know if it's actively maintained, who owns the codebase, and whether issues get resolved. gh-analyzer answers that in seconds.
 
 <!-- Add demo GIF here after recording -->
-<!-- ![gh-analyzer demo](docs/demo.gif) -->
+![gh-analyzer demo](docs/demo.gif)
 
 A command-line tool that scores GitHub repository health across commit momentum, bus factor, issue resolution, PR latency, and release cadence. Tested across Python 3.11, 3.12, and 3.13 with 61 unit tests.
 
