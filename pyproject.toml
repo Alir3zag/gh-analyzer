@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gh-analyzer"
-version = "0.1.3"
+version = "0.1.4"
 description = "GitHub repository health analyzer — scores repos 0-100 across commit momentum, bus factor, issue resolution, PR latency, and release cadence"
 authors = ["Alireza <a.reza.eftekhar@gmail.com>"]
 readme = "README.md"
